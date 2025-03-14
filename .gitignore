@@ -1,0 +1,15 @@
+# Fichiers sensibles
+config.py
+.env
+*.pem
+*.key
+credentials/
+
+# Fichiers générés
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
