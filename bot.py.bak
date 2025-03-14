@@ -219,40 +219,154 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return EMAIL_INPUT
 
-async def domain_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+aasync def domain_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère l'entrée du domaine"""
     domain = update.message.text.strip()
     
     # Validation basique du domaine
     import re
-    domain_regex = r'^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}
-
+    domain_regex = r'^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$'
+    if not re.match(domain_regex, domain, re.IGNORECASE):
+        await update.message.reply_text(
+            "⚠️ <b>FORMAT INVALIDE</b> ⚠️\n\n"
+            "Le format du domaine n'est pas valide.\n"
+            "Veuillez entrer un domaine au format correct (ex: example.com):",
+            parse_mode='HTML'
+        )
+        return DOMAIN_INPUT
+    
+    await update.message.reply_text(
+        f"🔄 <b>ANALYSE EN COURS</b> 🔄\n\n"
+        f"Domaine cible: <code>{domain}</code>\n"
+        f"• Récupération des informations WHOIS\n"
+        f"• Analyse des enregistrements DNS\n"
+        f"• Vérification des ports ouverts\n"
+        f"• Recherche de menaces connues\n\n"
+        f"Veuillez patienter...",
+        parse_mode='HTML'
+    )
+    
+    try:
+        results = await scan_domain(domain)
+        
+        # Enregistrer les résultats pour la génération de rapport
+        context.user_data['last_results'] = results
+        context.user_data['last_type'] = 'domain'
+        
+        # Formater les résultats avec une meilleure présentation
+        header = f"🔒 <b>RAPPORT DE SÉCURITÉ: {domain}</b> 🔒\n\n"
+        
+        # Ajouter un résumé rapide
+        whois_data = next((r for r in results if r.get('title') == 'Informations WHOIS'), None)
+        dns_data = next((r for r in results if r.get('title') == 'Enregistrements DNS'), None)
+        vt_data = next((r for r in results if r.get('title') == 'Analyse VirusTotal'), None)
+        ports_data = next((r for r in results if r.get('title') == 'Ports ouverts'), None)
+        
+        summary = "<b>📝 RÉSUMÉ RAPIDE:</b>\n"
+        if whois_data:
+            registrar = whois_data.get('details', {}).get('registrar', 'Non disponible')
+            creation = whois_data.get('details', {}).get('creation_date', 'Non disponible')
+            summary += f"• Registrar: <code>{registrar}</code>\n"
+            summary += f"• Création: <code>{creation[:10] if len(creation) > 10 else creation}</code>\n"
+        
+        if dns_data:
+            a_records = dns_data.get('details', {}).get('A', ['Non disponible'])
+            summary += f"• Adresse IP: <code>{a_records[0] if a_records else 'Non disponible'}</code>\n"
+        
+        if vt_data:
+            malicious = vt_data.get('details', {}).get('malicious', 0)
+            summary += f"• Menaces détectées: <code>{malicious}</code>\n"
+        
+        if ports_data:
+            open_ports = ports_data.get('details', {}).get('open_ports', [])
+            if isinstance(open_ports, list) and open_ports:
+                summary += f"• Ports ouverts: <code>{len(open_ports)}</code>\n"
+        
+        # Construire le message complet section par section
+        sections = []
+        
+        # Parcourir chaque catégorie de résultats
+        for result in results:
+            section = f"<b>📌 {result['title']}</b> <i>({result['source']})</i>\n"
+            
+            if 'details' in result:
+                for key, value in result['details'].items():
+                    if isinstance(value, list):
+                        section += f"  • <b>{key}</b>: <code>{', '.join(str(v) for v in value)}</code>\n"
+                    else:
+                        # Colorer certains résultats importants
+                        if key == 'malicious' and int(value) > 0:
+                            section += f"  • <b>{key}</b>: <code>⚠️ {value}</code>\n"
+                        elif key == 'warning' or key == 'error':
+                            section += f"  • <b>{key}</b>: <code>⚠️ {value}</code>\n"
+                        else:
+                            section += f"  • <b>{key}</b>: <code>{value}</code>\n"
+            
+            sections.append(section)
+        
+        footer = "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
+        footer += "• /rapport - Générer un PDF détaillé\n"
+        footer += "• /scan - Lancer une autre analyse\n"
+        footer += "• /recherche - Rechercher des informations"
+        
+        # Assembler le message final
+        response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
+        
+        # Envoyer les résultats
+        if len(response) > 4096:
+            # Premier message avec entête et résumé
+            first_part = header + summary + "\n\n<i>Suite dans le prochain message...</i>"
+            await update.message.reply_text(first_part, parse_mode='HTML')
+            
+            # Diviser le reste en morceaux
+            remaining = "\n\n".join(sections) + "\n" + footer
+            for i in range(0, len(remaining), 3800):
+                part = remaining[i:i+3800]
+                if i + 3800 >= len(remaining):
+                    part += "\n" + footer
+                await update.message.reply_text(part, parse_mode='HTML')
+        else:
+            await update.message.reply_text(response, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Erreur lors de l'analyse du domaine: {str(e)}")
+        await update.message.reply_text(
+            f"❌ <b>ERREUR D'ANALYSE</b> ❌\n\n"
+            f"Une erreur s'est produite lors de l'analyse du domaine:\n"
+            f"<code>{str(e)}</code>\n\n"
+            f"Veuillez réessayer ou contacter l'administrateur.",
+            parse_mode='HTML'
+        )
+    
+    return ConversationHandler.END
+    
 async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère l'entrée de l'URL"""
     url = update.message.text.strip()
     
     # Validation basique de l'URL
     import re
-    url_regex = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(/[-\w%!async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gère l'entrée de l'URL"""
-    url = update.message.text.strip()
-    
-    # Validation basique de l'URL
-    import re
-    url_regex = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(/[-\w%!async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gère l'entrée de l'URL"""
-    url = update.message.text.strip()
-    
-    # Validation basique de l'URL
-    import re
-    url_regex = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(/[-\w%!$&\'()*+,;=:]*)*$'\'()*+,;=:]*)*
+    url_regex = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(/[-\w%!$&\'()*+,;=:]*)*$'
     if not re.match(url_regex, url):
         await update.message.reply_text(
-            "Le format de l'URL semble incorrect. Veuillez entrer une URL valide (ex: https://example.com):"
+            "⚠️ <b>URL INVALIDE</b> ⚠️\n\n"
+            "Le format de l'URL n'est pas valide.\n"
+            "Veuillez entrer une URL complète commençant par http:// ou https:// (ex: https://example.com)",
+            parse_mode='HTML'
         )
         return URL_INPUT
     
-    await update.message.reply_text(f"Analyse de l'URL {url} en cours...")
+    # Afficher un message pendant l'analyse
+    await update.message.reply_text(
+        f"🔍 <b>ANALYSE DE SÉCURITÉ URL</b> 🔍\n\n"
+        f"Cible: <code>{url}</code>\n\n"
+        f"<b>Opérations en cours:</b>\n"
+        f"• Vérification des en-têtes de sécurité\n"
+        f"• Analyse des redirections\n"
+        f"• Recherche de vulnérabilités\n"
+        f"• Scan de réputation\n\n"
+        f"<i>Cette opération peut prendre quelques instants...</i>",
+        parse_mode='HTML'
+    )
     
     try:
         results = await scan_url(url)
@@ -261,37 +375,139 @@ async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['last_results'] = results
         context.user_data['last_type'] = 'url'
         
-        # Formater les résultats
-        response = f"📊 Résultats de l'analyse pour {url}:\n\n"
+        # Trouver les informations importantes pour le résumé
+        headers_data = next((r for r in results if r.get('title') == 'En-têtes de sécurité'), None)
+        security_check = next((r for r in results if r.get('title') == 'Évaluation de sécurité'), None)
+        vt_data = next((r for r in results if r.get('title') == 'Analyse VirusTotal'), None)
         
+        # Construire l'en-tête avec l'URL raccourcie pour l'affichage
+        display_url = url
+        if len(url) > 40:
+            display_url = url[:37] + "..."
+        
+        header = f"🛡️ <b>ANALYSE DE SÉCURITÉ WEB</b> 🛡️\n"
+        header += f"<b>URL:</b> <code>{display_url}</code>\n\n"
+        
+        # Créer un résumé visuel
+        summary = "<b>📝 RÉSUMÉ DES RÉSULTATS:</b>\n"
+        
+        # Évaluation de sécurité
+        security_score = "N/A"
+        if security_check:
+            security_score = security_check.get('details', {}).get('score', "N/A")
+            recommendations = security_check.get('details', {}).get('recommandations', [])
+            
+            # Convertir le score en représentation visuelle
+            if security_score != "N/A":
+                score_rating = ""
+                score_num = int(security_score.split('/')[0])
+                if score_num == 4:
+                    score_rating = "🟢 Excellent"
+                elif score_num == 3:
+                    score_rating = "🟢 Bon"
+                elif score_num == 2:
+                    score_rating = "🟡 Moyen"
+                elif score_num == 1:
+                    score_rating = "🔴 Faible"
+                else:
+                    score_rating = "🔴 Critique"
+                
+                summary += f"• <b>Score de sécurité:</b> {score_rating} ({security_score})\n"
+            
+            if recommendations and len(recommendations) > 0:
+                summary += f"• <b>Problèmes détectés:</b> <code>{len(recommendations)}</code>\n"
+        
+        # VirusTotal 
+        if vt_data:
+            malicious = vt_data.get('details', {}).get('malicious', 0)
+            if int(malicious) > 0:
+                summary += f"• <b>Réputation:</b> 🔴 <code>{malicious} détections de menaces</code>\n"
+            else:
+                summary += f"• <b>Réputation:</b> 🟢 <code>Aucune menace détectée</code>\n"
+        
+        # Construire les sections détaillées
+        sections = []
+        
+        # Section pour chaque résultat
         for result in results:
-            response += f"📌 {result['title']} ({result['source']})\n"
+            section = f"<b>📌 {result['title']}</b> <i>({result['source']})</i>\n"
             
             if 'details' in result:
                 for key, value in result['details'].items():
-                    if isinstance(value, list):
-                        response += f"  • {key}: {', '.join(value)}\n"
+                    if key == 'recommandations' and isinstance(value, list):
+                        section += f"  • <b>{key}:</b>\n"
+                        for i, rec in enumerate(value, 1):
+                            section += f"    {i}. <code>{rec}</code>\n"
+                    elif isinstance(value, list):
+                        section += f"  • <b>{key}:</b> <code>{', '.join(str(v) for v in value)}</code>\n"
                     else:
-                        response += f"  • {key}: {value}\n"
+                        # Mise en forme spéciale pour certains en-têtes
+                        if result['title'] == 'En-têtes de sécurité':
+                            # Colorer les en-têtes selon leur présence
+                            if key in ['Strict-Transport-Security', 'Content-Security-Policy', 'X-Content-Type-Options', 'X-Frame-Options']:
+                                if 'Non présent' in str(value):
+                                    section += f"  • <b>{key}:</b> 🔴 <code>{value}</code>\n"
+                                else:
+                                    section += f"  • <b>{key}:</b> 🟢 <code>{value}</code>\n"
+                            else:
+                                section += f"  • <b>{key}:</b> <code>{value}</code>\n"
+                        # Coloration pour les résultats de VirusTotal
+                        elif key == 'malicious' and int(value) > 0:
+                            section += f"  • <b>{key}:</b> 🔴 <code>{value}</code>\n"
+                        elif key in ['suspicious', 'warning', 'error'] and value:
+                            section += f"  • <b>{key}:</b> 🟡 <code>{value}</code>\n"
+                        else:
+                            section += f"  • <b>{key}:</b> <code>{value}</code>\n"
             
-            response += "\n"
+            sections.append(section)
         
-        response += "Utilisez /rapport pour générer un PDF détaillé."
+        # Ajouter des suggestions basées sur les résultats
+        footer = "\n<b>🔧 RECOMMANDATIONS:</b>\n"
+        if security_check and 'details' in security_check and 'recommandations' in security_check['details']:
+            recs = security_check['details']['recommandations']
+            if recs and len(recs) > 0:
+                footer += "<i>Pour améliorer la sécurité:</i>\n"
+                for i, rec in enumerate(recs[:3], 1):  # Limiter à 3 recommandations pour la lisibilité
+                    footer += f"{i}. {rec}\n"
+                if len(recs) > 3:
+                    footer += f"<i>+ {len(recs) - 3} autres recommandations dans le rapport détaillé</i>\n"
+            else:
+                footer += "✅ <i>Cette URL semble bien configurée pour la sécurité!</i>\n"
+        
+        footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
+        footer += "• /rapport - Générer un PDF détaillé\n"
+        footer += "• /scan - Analyser une autre cible\n"
+        footer += "• /recherche - Rechercher plus d'informations"
+        
+        # Assembler le message final
+        response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
         
         # Envoyer les résultats
         if len(response) > 4096:
-            # Si le message est trop long, l'envoyer en plusieurs parties
-            for i in range(0, len(response), 4096):
-                await update.message.reply_text(response[i:i+4096])
+            # Premier message avec entête et résumé
+            first_part = header + summary + "\n\n<i>Suite dans le prochain message...</i>"
+            await update.message.reply_text(first_part, parse_mode='HTML')
+            
+            # Diviser le reste en morceaux
+            remaining = "\n\n".join(sections) + "\n" + footer
+            for i in range(0, len(remaining), 3800):
+                part = remaining[i:i+3800]
+                if i + 3800 >= len(remaining):
+                    part += "\n" + footer
+                await update.message.reply_text(part, parse_mode='HTML')
         else:
-            await update.message.reply_text(response)
+            await update.message.reply_text(response, parse_mode='HTML')
     except Exception as e:
         logger.error(f"Erreur lors de l'analyse de l'URL: {str(e)}")
         await update.message.reply_text(
-            f"Une erreur s'est produite lors de l'analyse: {str(e)}"
+            f"❌ <b>ERREUR D'ANALYSE</b> ❌\n\n"
+            f"Une erreur s'est produite lors de l'analyse de l'URL:\n"
+            f"<code>{str(e)}</code>\n\n"
+            f"Veuillez vérifier que l'URL est accessible et réessayer.",
+            parse_mode='HTML'
         )
     
-    return ConversationHandler.END\'()*+,;=:]*)*
+    return ConversationHandler.END
 
 async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère l'entrée de l'email"""
@@ -299,7 +515,155 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Validation basique de l'email
     import re
-    email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}
+    email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_regex, email):
+        await update.message.reply_text(
+            "⚠️ <b>EMAIL INVALIDE</b> ⚠️\n\n"
+            "Le format de l'adresse email n'est pas valide.\n"
+            "Veuillez entrer une adresse au format correct (ex: utilisateur@domaine.com)",
+            parse_mode='HTML'
+        )
+        return EMAIL_INPUT
+    
+    # Extraire le domaine pour l'affichage
+    domain = email.split('@')[1]
+    
+    await update.message.reply_text(
+        f"✉️ <b>ANALYSE EMAIL EN COURS</b> ✉️\n\n"
+        f"Adresse: <code>{email}</code>\n"
+        f"Domaine: <code>{domain}</code>\n\n"
+        f"<b>Vérifications en cours:</b>\n"
+        f"• Format et syntaxe\n"
+        f"• Configuration du domaine\n"
+        f"• Enregistrements MX\n"
+        f"• Protection SPF/DMARC\n\n"
+        f"<i>Veuillez patienter pendant l'analyse...</i>",
+        parse_mode='HTML'
+    )
+    
+    try:
+        results = await scan_email(email)
+        
+        # Enregistrer les résultats pour la génération de rapport
+        context.user_data['last_results'] = results
+        context.user_data['last_type'] = 'email'
+        
+        # Trouver les informations importantes pour l'affichage
+        format_check = next((r for r in results if r.get('title') == 'Validation du format'), None)
+        domain_check = next((r for r in results if r.get('title') == 'Validation du domaine'), None)
+        mx_check = next((r for r in results if r.get('title') == 'Enregistrements MX'), None)
+        spf_check = next((r for r in results if r.get('title') == 'Enregistrement SPF'), None)
+        dmarc_check = next((r for r in results if r.get('title') == 'Enregistrement DMARC'), None)
+        
+        # Construire l'en-tête
+        header = f"✉️ <b>RAPPORT D'ANALYSE EMAIL</b> ✉️\n"
+        header += f"<b>Adresse:</b> <code>{email}</code>\n\n"
+        
+        # Créer un résumé de sécurité
+        summary = "<b>📝 RÉSUMÉ DE SÉCURITÉ:</b>\n"
+        
+        # Vérifier si le domaine peut recevoir des emails
+        domain_status = "⚠️ Problèmes détectés"
+        if domain_check:
+            status = domain_check.get('details', {}).get('status', '')
+            if 'peut recevoir' in status:
+                domain_status = "✅ Fonctionnel"
+        summary += f"• <b>Réception d'emails:</b> {domain_status}\n"
+        
+        # Vérifier SPF
+        spf_status = "❌ Non configuré"
+        if spf_check:
+            if 'warning' not in spf_check.get('details', {}):
+                spf_status = "✅ Configuré"
+        summary += f"• <b>Protection SPF:</b> {spf_status}\n"
+        
+        # Vérifier DMARC
+        dmarc_status = "❌ Non configuré"
+        if dmarc_check:
+            if 'warning' not in dmarc_check.get('details', {}):
+                dmarc_status = "✅ Configuré"
+        summary += f"• <b>Protection DMARC:</b> {dmarc_status}\n"
+        
+        # Indicateur de sécurité global
+        security_level = "🔴 Faible"
+        if spf_status == "✅ Configuré" and dmarc_status == "✅ Configuré":
+            security_level = "🟢 Élevé"
+        elif spf_status == "✅ Configuré" or dmarc_status == "✅ Configuré":
+            security_level = "🟡 Moyen"
+        summary += f"• <b>Niveau de sécurité:</b> {security_level}\n"
+        
+        # Construire les sections détaillées
+        sections = []
+        
+        # Ajouter chaque section de résultat avec une mise en forme améliorée
+        for result in results:
+            section = f"<b>📌 {result['title']}</b> <i>({result['source']})</i>\n"
+            
+            if 'details' in result:
+                for key, value in result['details'].items():
+                    if isinstance(value, list):
+                        section += f"  • <b>{key}:</b> <code>{', '.join(str(v) for v in value)}</code>\n"
+                    else:
+                        # Coloration spécifique pour les statuts
+                        if 'warning' in key or 'error' in key:
+                            section += f"  • <b>{key}:</b> 🔴 <code>{value}</code>\n"
+                        elif 'status' in key and 'peut recevoir' in str(value):
+                            section += f"  • <b>{key}:</b> 🟢 <code>{value}</code>\n"
+                        elif key == 'spf_record' or key == 'dmarc_record':
+                            section += f"  • <b>{key}:</b> 🟢 <code>{value}</code>\n"
+                        elif 'info' in key:
+                            section += f"  • <b>{key}:</b> ℹ️ <code>{value}</code>\n"
+                        else:
+                            section += f"  • <b>{key}:</b> <code>{value}</code>\n"
+            
+            sections.append(section)
+        
+        # Ajouter des recommandations basées sur les résultats
+        footer = "\n<b>🔧 RECOMMANDATIONS:</b>\n"
+        
+        if spf_status == "❌ Non configuré":
+            footer += "• Configurez un enregistrement SPF pour ce domaine\n"
+        
+        if dmarc_status == "❌ Non configuré":
+            footer += "• Ajoutez un enregistrement DMARC pour améliorer la sécurité\n"
+        
+        if spf_status == "✅ Configuré" and dmarc_status == "✅ Configuré":
+            footer += "• Excellent! Ce domaine est bien protégé contre l'usurpation d'identité\n"
+        
+        footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
+        footer += "• /rapport - Générer un PDF détaillé\n"
+        footer += "• /scan - Analyser une autre cible\n"
+        footer += "• /recherche - Rechercher plus d'informations"
+        
+        # Assembler le message final
+        response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
+        
+        # Envoyer les résultats
+        if len(response) > 4096:
+            # Premier message avec entête et résumé
+            first_part = header + summary + "\n\n<i>Suite dans le prochain message...</i>"
+            await update.message.reply_text(first_part, parse_mode='HTML')
+            
+            # Diviser le reste en morceaux
+            remaining = "\n\n".join(sections) + "\n" + footer
+            for i in range(0, len(remaining), 3800):
+                part = remaining[i:i+3800]
+                if i + 3800 >= len(remaining):
+                    part += "\n" + footer
+                await update.message.reply_text(part, parse_mode='HTML')
+        else:
+            await update.message.reply_text(response, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Erreur lors de l'analyse de l'email: {str(e)}")
+        await update.message.reply_text(
+            f"❌ <b>ERREUR D'ANALYSE</b> ❌\n\n"
+            f"Une erreur s'est produite lors de l'analyse de l'email:\n"
+            f"<code>{str(e)}</code>\n\n"
+            f"Veuillez vérifier que le domaine existe et réessayer.",
+            parse_mode='HTML'
+        )
+    
+    return ConversationHandler.END
 
 async def keyword_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère l'entrée du mot-clé de recherche"""
