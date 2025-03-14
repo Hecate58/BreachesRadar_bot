@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import re
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -17,7 +18,10 @@ from config import (
 )
 
 # Importer les modules utilitaires
-from utils.search import search_web, search_reddit, search_github, search_google_dorks
+from utils.search import (
+    search_web, search_reddit, search_github, search_google_dorks,
+    get_dorks_by_category, DORKS_CATEGORIES
+)
 from utils.scan import scan_domain, scan_url, scan_email
 from utils.report import generate_pdf_report
 
@@ -28,6 +32,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# État de conversation supplémentaire pour les catégories de dorks
+CHOOSE_DORK_CATEGORY = 11
+DORK_DOMAIN_INPUT = 12
+
 # Fonction pour créer le clavier en ligne pour la recherche
 def get_search_keyboard():
     keyboard = [
@@ -37,12 +45,38 @@ def get_search_keyboard():
         ],
         [
             InlineKeyboardButton("💻 Github", callback_data="github"),
-            InlineKeyboardButton("🔎 Google Dorks", callback_data="dorks")
+            InlineKeyboardButton("🔎 Dorks", callback_data="dorks_menu")
         ],
         [
             InlineKeyboardButton("❌ Annuler", callback_data="cancel")
         ]
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+# Fonction pour créer le clavier des catégories de dorks
+def get_dorks_categories_keyboard():
+    keyboard = []
+    
+    # Organiser les catégories par paires
+    categories = list(DORKS_CATEGORIES.keys())
+    for i in range(0, len(categories), 2):
+        row = []
+        row.append(InlineKeyboardButton(categories[i], callback_data=f"dork_cat_{categories[i]}"))
+        if i + 1 < len(categories):
+            row.append(InlineKeyboardButton(categories[i+1], callback_data=f"dork_cat_{categories[i+1]}"))
+        keyboard.append(row)
+    
+    # Ajouter une option pour saisir un dork personnalisé
+    keyboard.append([
+        InlineKeyboardButton("🔍 Dork personnalisé", callback_data="custom_dork")
+    ])
+    
+    # Ajouter un bouton Retour
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Retour", callback_data="back_to_search"),
+        InlineKeyboardButton("❌ Annuler", callback_data="cancel")
+    ])
+    
     return InlineKeyboardMarkup(keyboard)
 
 # Fonction pour créer le clavier en ligne pour le scan
@@ -67,7 +101,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🌟 Bienvenue {user.mention_html()} ! 🌟\n\n"
         f"🛡️ Je suis votre assistant de cybersécurité personnel. Je peux vous aider à trouver des informations sensibles, analyser des vulnérabilités et générer des rapports détaillés.\n\n"
         f"📋 <b>Commandes principales:</b>\n\n"
-        f"🔍 /recherche - Explorer le web, Reddit, GitHub ou utiliser des Google Dorks\n"
+        f"🔍 /recherche - Explorer le web, Reddit, GitHub ou utiliser des Dorks\n"
         f"🔒 /scan - Analyser la sécurité d'un domaine, URL ou email\n"
         f"📊 /rapport - Générer un rapport PDF professionnel\n"
         f"ℹ️ /aide - Afficher toutes les instructions détaillées\n\n"
@@ -82,7 +116,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  • 🌐 <b>Web</b>: recherche sans API payante\n"
         "  • 📱 <b>Reddit</b>: explore les forums et discussions\n"
         "  • 💻 <b>GitHub</b>: trouve des dépôts de code pertinents\n"
-        "  • 🔎 <b>Google Dorks</b>: techniques avancées de recherche\n\n"
+        "  • 🔎 <b>Dorks</b>: techniques avancées de recherche par catégories\n\n"
         "🛡️ <b>SÉCURITÉ</b> avec /scan\n"
         "  • 🌍 <b>Domaine</b>: WHOIS, DNS, ports ouverts, menaces\n"
         "  • 🔗 <b>URL</b>: analyse des en-têtes, réputation, vulnérabilités\n"
@@ -91,12 +125,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  • Génère un PDF professionnel des derniers résultats\n"
         "  • Parfait pour documentation et partage\n\n"
         "❌ Pour annuler à tout moment, cliquez sur \"Annuler\"\n\n"
-        "💡 <b>ASTUCE</b>: Utilisez les Google Dorks pour des recherches de sécurité avancées!",
+        "💡 <b>ASTUCE</b>: Utilisez les dorks par catégorie pour des recherches ciblées!",
         parse_mode='HTML'
     )
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère la commande /recherche"""
+    # Debug: Afficher l'état actuel de la conversation
+    logger.debug(f"État de la conversation pour l'utilisateur {update.effective_user.id}: {context.user_data.get('conversation_state', 'Aucun')}")
+    
+    # Réinitialiser explicitement l'état de la conversation
+    if 'conversation_state' in context.user_data:
+        del context.user_data['conversation_state']
+    
     keyboard = get_search_keyboard()
     await update.message.reply_text(
         "🔍 <b>MODE RECHERCHE ACTIVÉ</b> 🔍\n\n"
@@ -104,10 +145,13 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🌐 <b>Web</b> - Recherche standard sur le web\n"
         "• 📱 <b>Reddit</b> - Exploration des discussions Reddit\n"
         "• 💻 <b>GitHub</b> - Recherche de code et projets\n"
-        "• 🔎 <b>Google Dorks</b> - Recherche avancée et ciblée",
+        "• 🔎 <b>Dorks</b> - Recherche avancée par catégories",
         parse_mode='HTML',
         reply_markup=keyboard
     )
+    
+    # Définir explicitement l'état de la conversation
+    context.user_data['conversation_state'] = CHOOSE_SEARCH
     return CHOOSE_SEARCH
 
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,44 +232,86 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     
-    # Traiter les options de recherche
-    if query.data in ["web", "reddit", "github", "dorks"]:
+    if query.data == "back_to_search":
+        keyboard = get_search_keyboard()
+        await query.edit_message_text(
+            "🔍 <b>MODE RECHERCHE ACTIVÉ</b> 🔍\n\n"
+            "Choisissez votre méthode de recherche :\n"
+            "• 🌐 <b>Web</b> - Recherche standard sur le web\n"
+            "• 📱 <b>Reddit</b> - Exploration des discussions Reddit\n"
+            "• 💻 <b>GitHub</b> - Recherche de code et projets\n"
+            "• 🔎 <b>Dorks</b> - Recherche avancée par catégories",
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        return CHOOSE_SEARCH
+    
+    # Afficher le menu des dorks
+    if query.data == "dorks_menu":
+        keyboard = get_dorks_categories_keyboard()
+        await query.edit_message_text(
+            "🔎 <b>CATÉGORIES DE DORKS</b> 🔎\n\n"
+            "Choisissez une catégorie pour voir les dorks associés:\n\n"
+            "<i>Les dorks sont des requêtes spécialisées pour découvrir des informations sensibles. Utilisez-les de manière éthique.</i>\n\n"
+            "Sélectionnez une catégorie, puis vous pourrez spécifier un domaine cible:",
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        return CHOOSE_DORK_CATEGORY
+    
+    # Traiter les catégories de dorks
+    if query.data.startswith("dork_cat_"):
+        category = query.data.replace("dork_cat_", "")
+        context.user_data['dork_category'] = category
+        
+        # Demander le domaine à l'utilisateur
+        await query.edit_message_text(
+            f"🔎 <b>DORKS - CATÉGORIE {category.upper()}</b> 🔎\n\n"
+            f"<i>{DORKS_CATEGORIES.get(category, 'Dorks pour cette catégorie')}</i>\n\n"
+            f"Veuillez entrer un domaine cible pour générer des dorks spécifiques:\n"
+            f"<i>Exemple: example.com</i>\n\n"
+            f"<i>Ou envoyez simplement un point (.) pour voir les dorks génériques.</i>",
+            parse_mode='HTML'
+        )
+        return DORK_DOMAIN_INPUT
+        
+    # Option pour saisir un dork personnalisé
+    if query.data == "custom_dork":
+        await query.edit_message_text(
+            f"🔎 <b>DORK PERSONNALISÉ</b> 🔎\n\n"
+            f"Entrez votre dork ou mot-clé pour des suggestions avancées:\n\n"
+            f"<i>Exemples:</i> <code>site:example.com filetype:pdf</code> ou <code>intext:password</code>",
+            parse_mode='HTML'
+        )
+        return DORK_INPUT
+    
+    # Traiter les options de recherche web standard
+    if query.data in ["web", "reddit", "github"]:
         context.user_data['search_type'] = query.data
         
         # Messages personnalisés selon le type de recherche
         search_icons = {
             'web': '🌐',
             'reddit': '📱',
-            'github': '💻',
-            'dorks': '🔎'
+            'github': '💻'
         }
         
         search_names = {
             'web': 'Web',
             'reddit': 'Reddit',
-            'github': 'GitHub',
-            'dorks': 'Google Dorks'
+            'github': 'GitHub'
         }
         
         icon = search_icons.get(query.data, '🔍')
         name = search_names.get(query.data, 'Inconnu')
         
-        if query.data == "dorks":
-            await query.edit_message_text(
-                f"{icon} <b>RECHERCHE {name.upper()}</b> {icon}\n\n"
-                f"Entrez votre Google Dork ou mot-clé pour des suggestions avancées:\n\n"
-                f"<i>Exemples:</i> <code>site:example.com filetype:pdf</code> ou <code>intext:password</code>",
-                parse_mode='HTML'
-            )
-            return DORK_INPUT
-        else:
-            await query.edit_message_text(
-                f"{icon} <b>RECHERCHE {name.upper()}</b> {icon}\n\n"
-                f"Entrez votre mot-clé ou phrase à rechercher:\n\n"
-                f"<i>Soyez précis pour de meilleurs résultats!</i>",
-                parse_mode='HTML'
-            )
-            return KEYWORD_INPUT
+        await query.edit_message_text(
+            f"{icon} <b>RECHERCHE {name.upper()}</b> {icon}\n\n"
+            f"Entrez votre mot-clé ou phrase à rechercher:\n\n"
+            f"<i>Soyez précis pour de meilleurs résultats!</i>",
+            parse_mode='HTML'
+        )
+        return KEYWORD_INPUT
     
     # Traiter les options de scan
     if query.data in ["domain", "url", "email"]:
@@ -282,12 +368,127 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return EMAIL_INPUT
 
+async def dork_domain_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gère l'entrée du domaine pour les dorks de catégorie"""
+    domain_input = update.message.text.strip()
+    category = context.user_data.get('dork_category', '')
+    
+    # Si l'utilisateur a juste entré un point, utiliser des dorks génériques
+    if domain_input == '.':
+        domain = None
+    else:
+        # Nettoyer le domaine de tout protocole et chemin
+        domain = domain_input
+        # Supprimer le protocole (http:// ou https://)
+        if domain.startswith(('http://', 'https://')):
+            domain = domain.split('://', 1)[1]
+        # Supprimer tout ce qui suit un slash
+        if '/' in domain:
+            domain = domain.split('/', 1)[0]
+    
+    # Validation basique du domaine si fourni
+    if domain:
+        # Expression régulière améliorée pour accepter les domaines avec tirets
+        domain_regex = r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$'
+        if not re.match(domain_regex, domain, re.IGNORECASE):
+            await update.message.reply_text(
+                "⚠️ <b>FORMAT INVALIDE</b> ⚠️\n\n"
+                "Le format du domaine n'est pas valide.\n"
+                "Veuillez entrer un domaine au format correct (ex: example.com):",
+                parse_mode='HTML'
+            )
+            return DORK_DOMAIN_INPUT
+    
+    # Log pour déboguer
+    logger.debug(f"Domaine validé: {domain}")
+    
+    await update.message.reply_text(
+        f"🔎 <b>GÉNÉRATION DE DORKS</b> 🔎\n\n"
+        f"Catégorie: <code>{category}</code>\n"
+        f"Domaine: <code>{domain if domain else 'Générique'}</code>\n"
+        f"<i>Préparation des dorks, veuillez patienter...</i>",
+        parse_mode='HTML'
+    )
+    
+    try:
+        results = await get_dorks_by_category(category, domain)
+        
+        if not results:
+            await update.message.reply_text(
+                f"❌ <b>CATÉGORIE NON TROUVÉE</b> ❌\n\n"
+                f"La catégorie <code>{category}</code> n'existe pas ou ne contient pas de dorks.\n"
+                f"Utilisez /recherche et sélectionnez 'Dorks' pour choisir une autre catégorie.",
+                parse_mode='HTML'
+            )
+            return ConversationHandler.END
+        
+        # Formater et envoyer les résultats
+        title = results[0].get('title', 'Dorks')
+        snippet = results[0].get('snippet', '')
+        
+        header = f"🔎 <b>DORKS - {category.upper()}</b> 🔎\n\n"
+        if domain:
+            header += f"<b>Domaine cible:</b> <code>{domain}</code>\n\n"
+        else:
+            header += f"<b>Dorks génériques</b> (remplacez 'example.com' par votre cible)\n\n"
+        
+        header += f"<i>{DORKS_CATEGORIES.get(category, '')}</i>\n\n"
+        header += "<b>Dorks prêts à utiliser:</b>\n\n"
+        
+        # Formater le snippet pour Telegram
+        snippet_parts = snippet.split("\n\n")
+        dorks_list = snippet_parts[1] if len(snippet_parts) > 1 else snippet
+        
+        # Limiter la longueur totale du message
+        if len(header + dorks_list) > 4000:
+            parts = []
+            current_part = header
+            for line in dorks_list.split('\n'):
+                if len(current_part + line + '\n') > 4000:
+                    parts.append(current_part)
+                    current_part = line + '\n'
+                else:
+                    current_part += line + '\n'
+            
+            if current_part:
+                parts.append(current_part)
+            
+            # Envoyer en plusieurs messages
+            for i, part in enumerate(parts):
+                if i == 0:  # Premier message avec header
+                    await update.message.reply_text(part, parse_mode='HTML')
+                else:  # Messages suivants
+                    await update.message.reply_text(part, parse_mode='HTML')
+        else:
+            # Tout envoyer en un seul message
+            await update.message.reply_text(header + dorks_list, parse_mode='HTML')
+        
+        # Ajouter un message pour expliquer comment utiliser ces dorks
+        usage_text = (
+            "<b>📝 COMMENT UTILISER CES DORKS</b>\n\n"
+            "1. Copiez le dork qui vous intéresse\n"
+            "2. Collez-le dans un moteur de recherche (Google, DuckDuckGo, etc.)\n"
+            "3. Analysez les résultats pour identifier les vulnérabilités potentielles\n\n"
+            "<b>⚠️ RAPPEL</b>: N'utilisez ces dorks que sur des domaines pour lesquels vous avez l'autorisation."
+        )
+        
+        await update.message.reply_text(usage_text, parse_mode='HTML')
+    except Exception as e:
+        logger.error(f"Erreur lors de la génération des dorks: {str(e)}")
+        await update.message.reply_text(
+            f"❌ <b>ERREUR</b> ❌\n\n"
+            f"Une erreur s'est produite lors de la génération des dorks:\n"
+            f"<code>{str(e)}</code>",
+            parse_mode='HTML'
+        )
+    
+    return ConversationHandler.END
+
 async def domain_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère l'entrée du domaine"""
     domain = update.message.text.strip()
     
     # Validation basique du domaine
-    import re
     domain_regex = r'^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$'
     if not re.match(domain_regex, domain, re.IGNORECASE):
         await update.message.reply_text(
@@ -370,7 +571,7 @@ async def domain_input_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         footer = "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
         footer += "• /rapport - Générer un PDF détaillé\n"
         footer += "• /scan - Lancer une autre analyse\n"
-        footer += "• /recherche - Rechercher des informations"
+        footer += "• /recherche - Retour au menu principal"
         
         # Assembler le message final
         response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
@@ -407,7 +608,6 @@ async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     
     # Validation basique de l'URL
-    import re
     url_regex = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(/[-\w%!$&\'()*+,;=:]*)*$'
     if not re.match(url_regex, url):
         await update.message.reply_text(
@@ -540,7 +740,7 @@ async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
         footer += "• /rapport - Générer un PDF détaillé\n"
         footer += "• /scan - Analyser une autre cible\n"
-        footer += "• /recherche - Rechercher plus d'informations"
+        footer += "• /recherche - Retour au menu principal"
         
         # Assembler le message final
         response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
@@ -577,7 +777,6 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     email = update.message.text.strip()
     
     # Validation basique de l'email
-    import re
     email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if not re.match(email_regex, email):
         await update.message.reply_text(
@@ -696,7 +895,7 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
         footer += "• /rapport - Générer un PDF détaillé\n"
         footer += "• /scan - Analyser une autre cible\n"
-        footer += "• /recherche - Rechercher plus d'informations"
+        footer += "• /recherche - Retour au menu principal"
         
         # Assembler le message final
         response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
@@ -737,15 +936,13 @@ async def keyword_input_handler(update: Update, context: ContextTypes.DEFAULT_TY
     search_icons = {
         'web': '🌐',
         'reddit': '📱',
-        'github': '💻',
-        'dorks': '🔎'
+        'github': '💻'
     }
     
     search_names = {
         'web': 'Web',
         'reddit': 'Reddit',
-        'github': 'GitHub',
-        'dorks': 'Google Dorks'
+        'github': 'GitHub'
     }
     
     icon = search_icons.get(search_type, '🔍')
@@ -873,98 +1070,82 @@ async def keyword_input_handler(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 async def dork_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gère l'entrée du Google Dork"""
+    """Gère l'entrée du dork personnalisé"""
     dork = update.message.text.strip()
     
     await update.message.reply_text(
-        f"🔎 <b>ANALYSE DE GOOGLE DORK</b> 🔎\n\n"
+        f"🔎 <b>ANALYSE DE DORK</b> 🔎\n\n"
         f"Requête: <code>{dork}</code>\n"
         f"<i>Analyse en cours, veuillez patienter...</i>",
         parse_mode='HTML'
     )
     
     try:
-        results = await search_google_dorks(dork)
+        # Extraire le domaine si présent dans le dork
+        domain = None
+        if "site:" in dork:
+            domain_match = re.search(r'site:([^\s]+)', dork)
+            if domain_match:
+                domain = domain_match.group(1)
+        
+        # Appel à la fonction search_google_dorks avec le domaine s'il a été extrait
+        results = await search_google_dorks(dork, target_domain=domain)
         
         # Enregistrer les résultats pour la génération de rapport
         context.user_data['last_results'] = results
         context.user_data['last_type'] = 'search'
         
         # En-tête détaillé
-        header = f"🔎 <b>ANALYSE GOOGLE DORK</b> 🔎\n\n"
+        header = f"🔎 <b>ANALYSE DE DORK</b> 🔎\n\n"
         header += f"<b>Dork analysé:</b> <code>{dork}</code>\n\n"
         
-        # Détection des opérateurs dans la requête pour l'affichage
-        operators = ["site:", "inurl:", "intitle:", "filetype:", "intext:", "ext:"]
-        detected = [op for op in operators if op in dork]
-        
-        if detected:
-            header += f"<b>Opérateurs détectés:</b> <code>{', '.join(detected)}</code>\n\n"
-        
-        header += "<b>📋 COMMENT UTILISER LES DORKS:</b>\n"
-        header += "Les Google Dorks sont des requêtes spécialisées pour cibler précisément des informations sur le web. "
-        header += "Utilisez-les avec précaution et éthique.\n\n"
-        
-        # Formater chaque section de résultat avec du HTML pour une meilleure présentation
-        sections = []
+        # Formatage de la réponse en tenant compte des limitations de Telegram
+        response_parts = []
+        current_part = header
         
         for result in results:
             title = result.get('title', 'Sans titre')
             source = result.get('source', 'Source inconnue')
-            snippet = result.get('snippet', 'Pas d\'information disponible').replace('\n', '<br>')
+            snippet = result.get('snippet', 'Pas d\'information disponible')
             
+            # Création d'une section pour ce résultat
             section = f"<b>📌 {title}</b> <i>({source})</i>\n"
-            section += f"{snippet}\n"
+            section += f"{snippet}\n\n"
             
-            sections.append(section)
-        
-        # Ajouter une section d'exemples pratiques
-        examples_section = "<b>🔍 EXEMPLES PRATIQUES DE DORKS:</b>\n"
-        examples_section += "<pre>"
-        examples_section += "site:example.com filetype:pdf       # PDFs sur un site\n"
-        examples_section += "intitle:\"Index of\" site:example.com # Dossiers ouverts\n"
-        examples_section += "site:example.com intext:password    # Cherche mots de passe\n"
-        examples_section += "site:example.com ext:sql OR ext:log # Fichiers sensibles\n"
-        examples_section += "</pre>"
-        
-        # Ajouter des recommendations de sécurité
-        footer = "\n<b>🔐 RECOMMANDATIONS DE SÉCURITÉ:</b>\n"
-        footer += "• Utilisez ces techniques pour vérifier la sécurité de vos propres ressources\n"
-        footer += "• Si vous trouvez des informations sensibles exposées, contactez immédiatement le responsable du site\n"
-        footer += "• L'utilisation malveillante de Google Dorks peut être illégale et éthiquement répréhensible\n"
-        
-        footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
-        footer += "• /rapport - Générer un PDF de ces résultats\n"
-        footer += "• /recherche - Effectuer une nouvelle recherche\n"
-        footer += "• /scan - Analyser plus en profondeur"
-        
-        # Assembler le message final
-        response = header + "\n\n".join(sections) + "\n\n" + examples_section + footer
-        
-        # Envoyer les résultats
-        if len(response) > 4096:
-            # Premier message avec l'en-tête
-            await update.message.reply_text(header, parse_mode='HTML')
-            
-            # Message principal avec les sections de résultats
-            sections_text = "\n\n".join(sections)
-            
-            # Diviser si nécessaire
-            if len(sections_text) > 3800:
-                for i in range(0, len(sections_text), 3800):
-                    await update.message.reply_text(sections_text[i:i+3800], parse_mode='HTML')
+            # Vérifier si l'ajout de cette section va dépasser la limite de 4096 caractères
+            if len(current_part) + len(section) > 3800:  # Marge de sécurité
+                response_parts.append(current_part)
+                current_part = section
             else:
-                await update.message.reply_text(sections_text, parse_mode='HTML')
+                current_part += section
+        
+        # Ajouter la dernière partie s'il en reste
+        if current_part:
+            response_parts.append(current_part)
+        
+        # Envoyer les messages en plusieurs parties si nécessaire
+        for i, part in enumerate(response_parts):
+            if i == len(response_parts) - 1:
+                # Ajouter un pied de page uniquement au dernier message
+                footer = "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
+                footer += "• /rapport - Générer un PDF de ces résultats\n"
+                footer += "• /recherche - Effectuer une nouvelle recherche\n"
+                footer += "• /scan - Analyser plus en profondeur"
+                
+                if len(part) + len(footer) <= 4096:
+                    part += footer
+                else:
+                    await update.message.reply_text(part, parse_mode='HTML')
+                    await update.message.reply_text(footer, parse_mode='HTML')
+                    continue
             
-            # Dernier message avec exemples et footer
-            await update.message.reply_text(examples_section + footer, parse_mode='HTML')
-        else:
-            await update.message.reply_text(response, parse_mode='HTML')
+            await update.message.reply_text(part, parse_mode='HTML')
+    
     except Exception as e:
         logger.error(f"Erreur lors de l'analyse du dork: {str(e)}")
         await update.message.reply_text(
             f"❌ <b>ERREUR D'ANALYSE</b> ❌\n\n"
-            f"Une erreur s'est produite lors de l'analyse du Google Dork:\n"
+            f"Une erreur s'est produite lors de l'analyse du dork:\n"
             f"<code>{str(e)}</code>\n\n"
             f"Veuillez vérifier la syntaxe et réessayer.",
             parse_mode='HTML'
@@ -1000,6 +1181,8 @@ def main():
         entry_points=[CommandHandler("recherche", search_command)],
         states={
             CHOOSE_SEARCH: [CallbackQueryHandler(button_handler)],
+            CHOOSE_DORK_CATEGORY: [CallbackQueryHandler(button_handler)],
+            DORK_DOMAIN_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, dork_domain_input_handler)],
             KEYWORD_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, keyword_input_handler)],
             DORK_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, dork_input_handler)],
         },

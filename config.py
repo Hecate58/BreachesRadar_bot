@@ -1,10 +1,3 @@
-REDDIT_CLIENT_ID = "1znsRGrxUXp0stoWuc3_JA"  # obtenable gratuitement via https://www.reddit.com/prefs/apps
-REDDIT_CLIENT_SECRET = None  # Optionnel 
-REDDIT_USER_AGENT = "PythonSecurityBot/1.0"  # User-agent pour les requêtes Reddit
-ALIENVAULT_API_KEY = None  # Optionnel - gratuit via https://otx.alienvault.com
-GITHUB_TOKEN = 'your_github_token'
-URLSCAN_API_KEY = '01958fa1-4181-7002-8768-500c7e53d586'
-VIRUSTOTAL_API_KEY = "0f694fa53021b262eb7e32bd3afc0b5757012cdb619156a2c461f425fbdc8c22"  
 
 import os
 
@@ -22,9 +15,9 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "your_github_token")
 URLSCAN_API_KEY = os.environ.get("URLSCAN_API_KEY", "01958fa1-4181-7002-8768-500c7e53d586")
 VIRUSTOTAL_API_KEY = os.environ.get("VIRUSTOTAL_API_KEY", "0f694fa53021b262eb7e32bd3afc0b5757012cdb619156a2c461f425fbdc8c22")
 
-# Configuration de logging
+# Dans config.py
+LOG_LEVEL = "DEBUG"  # au lieu de "INFO"
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-LOG_LEVEL = 'INFO'
 
 # Etats de conversation pour Telegram
 CHOOSE_SEARCH, CHOOSE_SCAN, DOMAIN_INPUT, EMAIL_INPUT, URL_INPUT, KEYWORD_INPUT, DORK_INPUT, GENERATE_REPORT = range(8)
