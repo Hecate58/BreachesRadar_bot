@@ -773,7 +773,7 @@ async def url_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Gère l'entrée de l'email"""
+    """Gère l'entrée de l'email avec rapport détaillé"""
     email = update.message.text.strip()
     
     # Validation basique de l'email
@@ -782,7 +782,7 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "⚠️ <b>EMAIL INVALIDE</b> ⚠️\n\n"
             "Le format de l'adresse email n'est pas valide.\n"
-            "Veuillez entrer une adresse au format correct (ex: utilisateur@domaine.com)",
+            "Veuillez entrer une adresse au format correct (ex: utilisateur@example.com)",
             parse_mode='HTML'
         )
         return EMAIL_INPUT
@@ -794,12 +794,13 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"✉️ <b>ANALYSE EMAIL EN COURS</b> ✉️\n\n"
         f"Adresse: <code>{email}</code>\n"
         f"Domaine: <code>{domain}</code>\n\n"
-        f"<b>Vérifications en cours:</b>\n"
-        f"• Format et syntaxe\n"
-        f"• Configuration du domaine\n"
-        f"• Enregistrements MX\n"
-        f"• Protection SPF/DMARC\n\n"
-        f"<i>Veuillez patienter pendant l'analyse...</i>",
+        f"<b>Analyses en cours:</b>\n"
+        f"• Validation du format email\n"
+        f"• Validation du domaine\n"
+        f"• Vérification des enregistrements MX\n" 
+        f"• Vérification des protections SPF/DMARC\n"
+        f"• Recherche dans les bases de fuites de données\n\n"
+        f"<i>Génération du rapport détaillé en cours, veuillez patienter...</i>",
         parse_mode='HTML'
     )
     
@@ -810,111 +811,307 @@ async def email_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['last_results'] = results
         context.user_data['last_type'] = 'email'
         
-        # Trouver les informations importantes pour l'affichage
-        format_check = next((r for r in results if r.get('title') == 'Validation du format'), None)
+        # Construction du rapport détaillé
+        # Structure: En-tête + Sommaire + Sections détaillées + Recommandations
+        
+        # EN-TÊTE
+        header = f"📋 <b>RAPPORT D'ANALYSE DE SÉCURITÉ EMAIL</b> 📋\n\n"
+        header += f"<b>Date d'analyse:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+        header += f"<b>Email analysé:</b> <code>{email}</code>\n"
+        header += f"<b>Domaine:</b> <code>{domain}</code>\n"
+        
+        # SECTIONS
+        sections = []
+        
+        # Extraire les informations clés
         domain_check = next((r for r in results if r.get('title') == 'Validation du domaine'), None)
         mx_check = next((r for r in results if r.get('title') == 'Enregistrements MX'), None)
         spf_check = next((r for r in results if r.get('title') == 'Enregistrement SPF'), None)
         dmarc_check = next((r for r in results if r.get('title') == 'Enregistrement DMARC'), None)
+        breach_check = next((r for r in results if r.get('title') == 'Analyse des fuites de données'), None)
+        security_tips = next((r for r in results if r.get('title') == 'Recommandations de sécurité'), None)
         
-        # Construire l'en-tête
-        header = f"✉️ <b>RAPPORT D'ANALYSE EMAIL</b> ✉️\n"
-        header += f"<b>Adresse:</b> <code>{email}</code>\n\n"
+        # 1. SOMMAIRE - Niveau de sécurité global
+        summary = "<b>📊 SOMMAIRE DES RÉSULTATS</b>\n\n"
         
-        # Créer un résumé de sécurité
-        summary = "<b>📝 RÉSUMÉ DE SÉCURITÉ:</b>\n"
+        # Calculer le score global
+        security_score = 0
+        max_score = 5
         
-        # Vérifier si le domaine peut recevoir des emails
-        domain_status = "⚠️ Problèmes détectés"
-        if domain_check:
+        # Vérifier si le domaine est fonctionnel
+        domain_status = "❌ Problèmes détectés"
+        if domain_check and 'details' in domain_check:
             status = domain_check.get('details', {}).get('status', '')
             if 'peut recevoir' in status:
                 domain_status = "✅ Fonctionnel"
-        summary += f"• <b>Réception d'emails:</b> {domain_status}\n"
+                security_score += 1
         
         # Vérifier SPF
         spf_status = "❌ Non configuré"
-        if spf_check:
-            if 'warning' not in spf_check.get('details', {}):
+        if spf_check and 'details' in spf_check:
+            if 'warning' not in spf_check.get('details', {}) and 'error' not in spf_check.get('details', {}):
                 spf_status = "✅ Configuré"
-        summary += f"• <b>Protection SPF:</b> {spf_status}\n"
+                security_score += 1
         
         # Vérifier DMARC
         dmarc_status = "❌ Non configuré"
-        if dmarc_check:
-            if 'warning' not in dmarc_check.get('details', {}):
+        if dmarc_check and 'details' in dmarc_check:
+            if 'warning' not in dmarc_check.get('details', {}) and 'error' not in dmarc_check.get('details', {}):
                 dmarc_status = "✅ Configuré"
-        summary += f"• <b>Protection DMARC:</b> {dmarc_status}\n"
+                security_score += 1
         
-        # Indicateur de sécurité global
-        security_level = "🔴 Faible"
-        if spf_status == "✅ Configuré" and dmarc_status == "✅ Configuré":
-            security_level = "🟢 Élevé"
-        elif spf_status == "✅ Configuré" or dmarc_status == "✅ Configuré":
-            security_level = "🟡 Moyen"
-        summary += f"• <b>Niveau de sécurité:</b> {security_level}\n"
+        # Vérifier les fuites de données
+        breach_status = "❓ Vérification indisponible"
+        breach_details = ""
         
-        # Construire les sections détaillées
-        sections = []
-        
-        # Ajouter chaque section de résultat avec une mise en forme améliorée
-        for result in results:
-            section = f"<b>📌 {result['title']}</b> <i>({result['source']})</i>\n"
-            
-            if 'details' in result:
-                for key, value in result['details'].items():
-                    if isinstance(value, list):
-                        section += f"  • <b>{key}:</b> <code>{', '.join(str(v) for v in value)}</code>\n"
+        if breach_check and 'details' in breach_check:
+            if 'warning' in breach_check.get('details', {}):
+                breach_status = "⚠️ Service indisponible"
+            elif 'info' in breach_check.get('details', {}):
+                breach_status = "✅ Aucune fuite détectée"
+                security_score += 2
+                breach_details = breach_check.get('details', {}).get('info', '')
+            elif 'note' in breach_check.get('details', {}):
+                # Données simulées
+                breach_count = breach_check.get('details', {}).get('fuites_detectees', 0)
+                if breach_count > 0:
+                    risk_level = breach_check.get('details', {}).get('niveau_de_risque', '')
+                    passwords = breach_check.get('details', {}).get('mots_de_passe_exposes', 0)
+                    
+                    if risk_level == "Critique":
+                        breach_status = f"🔴 {breach_count} fuites - Risque critique"
+                    elif risk_level == "Élevé":
+                        breach_status = f"🟠 {breach_count} fuites - Risque élevé"
+                        security_score += 0.5
+                    elif risk_level == "Moyen":
+                        breach_status = f"🟡 {breach_count} fuites - Risque moyen"
+                        security_score += 1
                     else:
-                        # Coloration spécifique pour les statuts
-                        if 'warning' in key or 'error' in key:
-                            section += f"  • <b>{key}:</b> 🔴 <code>{value}</code>\n"
-                        elif 'status' in key and 'peut recevoir' in str(value):
-                            section += f"  • <b>{key}:</b> 🟢 <code>{value}</code>\n"
-                        elif key == 'spf_record' or key == 'dmarc_record':
-                            section += f"  • <b>{key}:</b> 🟢 <code>{value}</code>\n"
-                        elif 'info' in key:
-                            section += f"  • <b>{key}:</b> ℹ️ <code>{value}</code>\n"
-                        else:
-                            section += f"  • <b>{key}:</b> <code>{value}</code>\n"
+                        breach_status = f"🟢 {breach_count} fuites - Risque faible"
+                        security_score += 1.5
+                    
+                    breach_details = f"{breach_count} fuites détectées, {passwords} mots de passe exposés"
+                else:
+                    breach_status = "✅ Aucune fuite détectée"
+                    security_score += 2
+            else:
+                breach_count = breach_check.get('details', {}).get('fuites_detectees', 0)
+                if breach_count == 0:
+                    breach_status = "✅ Aucune fuite détectée"
+                    security_score += 2
+                elif breach_count > 0:
+                    risk_level = breach_check.get('details', {}).get('niveau_de_risque', '')
+                    
+                    if risk_level == "Critique":
+                        breach_status = f"🔴 {breach_count} fuites - Risque critique"
+                    elif risk_level == "Élevé":
+                        breach_status = f"🟠 {breach_count} fuites - Risque élevé"
+                        security_score += 0.5
+                    elif risk_level == "Moyen":
+                        breach_status = f"🟡 {breach_count} fuites - Risque moyen"
+                        security_score += 1
+                    else:
+                        breach_status = f"🟢 {breach_count} fuites - Risque faible"
+                        security_score += 1.5
+        
+        # Calculer le score global en pourcentage
+        security_percentage = int((security_score / max_score) * 100)
+        
+        # Niveau de sécurité global avec visualisation
+        security_level = ""
+        if security_percentage >= 80:
+            security_level = "🟢 Élevé"
+        elif security_percentage >= 60:
+            security_level = "🟡 Moyen"
+        elif security_percentage >= 40:
+            security_level = "🟠 Modéré"
+        else:
+            security_level = "🔴 Faible"
+        
+        # Ajouter des barres de progression pour visualiser le score
+        progress_bar = ""
+        filled_blocks = int(security_percentage / 10)
+        empty_blocks = 10 - filled_blocks
+        
+        for _ in range(filled_blocks):
+            progress_bar += "■"
+        for _ in range(empty_blocks):
+            progress_bar += "□"
+        
+        summary += f"<b>Niveau de sécurité global:</b> {security_level} ({security_percentage}%)\n"
+        summary += f"<code>{progress_bar}</code>\n\n"
+        
+        # Résumé des résultats principaux
+        summary += f"<b>Réception d'emails:</b> {domain_status}\n"
+        summary += f"<b>Protection SPF:</b> {spf_status}\n"
+        summary += f"<b>Protection DMARC:</b> {dmarc_status}\n"
+        summary += f"<b>Fuites de données:</b> {breach_status}\n"
+        
+        if breach_details:
+            summary += f"<i>{breach_details}</i>\n"
+        
+        # 2. CONFIGURATION TECHNIQUE - Section détaillée sur la configuration technique
+        tech_section = "<b>🔧 CONFIGURATION TECHNIQUE</b>\n\n"
+        
+        # MX Records
+        tech_section += "<b>Enregistrements MX</b> (serveurs de messagerie):\n"
+        if mx_check and 'details' in mx_check:
+            mx_records = mx_check.get('details', {}).get('mx_records', [])
+            if mx_records:
+                for record in mx_records:
+                    tech_section += f"  • <code>{record}</code>\n"
+            else:
+                tech_section += "  • <i>Aucun enregistrement MX trouvé</i>\n"
+        else:
+            tech_section += "  • <i>Vérification impossible</i>\n"
+        
+        # SPF Details
+        tech_section += "\n<b>SPF</b> (protection contre l'usurpation d'expéditeur):\n"
+        if spf_check and 'details' in spf_check:
+            if 'spf_record' in spf_check.get('details', {}):
+                tech_section += f"  • <code>{spf_check.get('details', {}).get('spf_record')}</code>\n"
+                
+                # Analyse du contenu SPF
+                spf_record = spf_check.get('details', {}).get('spf_record')
+                if "~all" in spf_record:
+                    tech_section += f"  • <i>Configuration en mode soft-fail (~all)</i>\n"
+                elif "-all" in spf_record:
+                    tech_section += f"  • <i>Configuration en mode strict (-all) ✅</i>\n"
+                elif "?all" in spf_record:
+                    tech_section += f"  • <i>Configuration en mode neutre (?all) ⚠️</i>\n"
+                elif "+all" in spf_record:
+                    tech_section += f"  • <i>Configuration dangereuse (+all) - Autorise toute usurpation! 🔴</i>\n"
+            elif 'warning' in spf_check.get('details', {}):
+                tech_section += f"  • <i>{spf_check.get('details', {}).get('warning')}</i>\n"
+                tech_section += f"  • <i>Risque: Usurpation d'adresse email possible</i> 🔴\n"
+            elif 'error' in spf_check.get('details', {}):
+                tech_section += f"  • <i>Erreur: {spf_check.get('details', {}).get('error')}</i>\n"
+        else:
+            tech_section += "  • <i>Vérification impossible</i>\n"
+        
+        # DMARC Details
+        tech_section += "\n<b>DMARC</b> (politique de gestion des emails non conformes):\n"
+        if dmarc_check and 'details' in dmarc_check:
+            if 'dmarc_record' in dmarc_check.get('details', {}):
+                tech_section += f"  • <code>{dmarc_check.get('details', {}).get('dmarc_record')}</code>\n"
+                
+                # Analyse du contenu DMARC
+                dmarc_record = dmarc_check.get('details', {}).get('dmarc_record')
+                if "p=none" in dmarc_record:
+                    tech_section += f"  • <i>Mode surveillance uniquement (p=none) ⚠️</i>\n"
+                elif "p=quarantine" in dmarc_record:
+                    tech_section += f"  • <i>Mode quarantaine (p=quarantine) ✅</i>\n"
+                elif "p=reject" in dmarc_record:
+                    tech_section += f"  • <i>Mode rejet strict (p=reject) ✅</i>\n"
+                
+                if "rua=" in dmarc_record:
+                    tech_section += f"  • <i>Rapports d'agrégation configurés</i>\n"
+                if "ruf=" in dmarc_record:
+                    tech_section += f"  • <i>Rapports forensiques configurés</i>\n"
+            elif 'warning' in dmarc_check.get('details', {}):
+                tech_section += f"  • <i>{dmarc_check.get('details', {}).get('warning')}</i>\n"
+                tech_section += f"  • <i>Risque: Phishing facilité, pas de visibilité sur les usurpations</i> 🔴\n"
+            elif 'error' in dmarc_check.get('details', {}):
+                tech_section += f"  • <i>Erreur: {dmarc_check.get('details', {}).get('error')}</i>\n"
+        else:
+            tech_section += "  • <i>Vérification impossible</i>\n"
+        
+        sections.append(tech_section)
+        
+        # 3. FUITES DE DONNÉES - Section détaillée sur les fuites
+        if breach_check and 'details' in breach_check:
+            breach_section = "<b>🔍 ANALYSE DES FUITES DE DONNÉES</b>\n\n"
             
-            sections.append(section)
+            if 'note' in breach_check.get('details', {}):
+                breach_section += f"<i>{breach_check.get('details', {}).get('note')}</i>\n\n"
+            
+            breach_count = breach_check.get('details', {}).get('fuites_detectees', 0)
+            
+            if breach_count > 0:
+                breach_section += f"<b>Fuites détectées:</b> {breach_count}\n"
+                breach_section += f"<b>Mots de passe exposés:</b> {breach_check.get('details', {}).get('mots_de_passe_exposes', 0)}\n"
+                breach_section += f"<b>Niveau de risque:</b> {breach_check.get('details', {}).get('niveau_de_risque', 'Inconnu')}\n\n"
+                
+                # Détails des fuites
+                if 'sources_de_fuites' in breach_check.get('details', {}):
+                    breach_section += "<b>Fuites détectées dans:</b>\n"
+                    for i, source in enumerate(breach_check.get('details', {}).get('sources_de_fuites', []), 1):
+                        breach_section += f"  {i}. <code>{source}</code>\n"
+                
+                # Chronologie des fuites
+                if 'details_fuites' in breach_check.get('details', {}):
+                    breach_section += "\n<b>Chronologie des incidents:</b>\n"
+                    for i, breach_detail in enumerate(breach_check.get('details', {}).get('details_fuites', []), 1):
+                        breach_section += f"  {i}. <code>{breach_detail}</code>\n"
+                
+                breach_section += "\n<b>Impact potentiel:</b>\n"
+                breach_section += "  • Risque de <b>credential stuffing</b> si vous réutilisez vos mots de passe\n"
+                breach_section += "  • Possibilité de <b>phishing ciblé</b> avec vos informations personnelles\n"
+                breach_section += "  • Risque d'usurpation d'identité accru\n"
+            else:
+                breach_section += "<b>✅ Aucune fuite de données détectée</b>\n\n"
+                breach_section += "<i>Cet email n'a pas été trouvé dans les bases de données de fuites connues.</i>\n"
+                breach_section += "<i>Cela ne garantit pas une sécurité absolue mais constitue un bon indicateur.</i>\n"
+            
+            sections.append(breach_section)
         
-        # Ajouter des recommandations basées sur les résultats
-        footer = "\n<b>🔧 RECOMMANDATIONS:</b>\n"
+        # 4. RECOMMANDATIONS - Section détaillée avec recommandations
+        recommendation_section = "<b>📝 RECOMMANDATIONS DE SÉCURITÉ</b>\n\n"
         
+        # Recommandations SPF/DMARC
         if spf_status == "❌ Non configuré":
-            footer += "• Configurez un enregistrement SPF pour ce domaine\n"
+            recommendation_section += "🔹 <b>Configurer SPF</b> : Protégez votre domaine contre l'usurpation d'emails\n"
+            recommendation_section += "  • Ajoutez un enregistrement TXT de type SPF à votre zone DNS\n"
+            recommendation_section += "  • Format recommandé: <code>v=spf1 mx ~all</code>\n\n"
         
         if dmarc_status == "❌ Non configuré":
-            footer += "• Ajoutez un enregistrement DMARC pour améliorer la sécurité\n"
+            recommendation_section += "🔹 <b>Configurer DMARC</b> : Améliorez la protection contre le phishing\n"
+            recommendation_section += "  • Ajoutez un enregistrement TXT _dmarc à votre zone DNS\n"
+            recommendation_section += "  • Format recommandé: <code>v=DMARC1; p=quarantine; rua=mailto:admin@votredomaine.com</code>\n\n"
         
+        # Recommandations basées sur les fuites
+        if breach_check and breach_check.get('details', {}).get('fuites_detectees', 0) > 0:
+            recommendation_section += "🔹 <b>Actions urgentes suite aux fuites détectées:</b>\n"
+            recommendation_section += "  • Changez immédiatement les mots de passe associés à cet email\n"
+            recommendation_section += "  • Utilisez des mots de passe uniques et complexes pour chaque site\n"
+            recommendation_section += "  • Activez l'authentification à deux facteurs (2FA) partout où c'est possible\n"
+            recommendation_section += "  • Vérifiez vos comptes pour détecter toute activité suspecte\n\n"
+        
+        # Recommandations générales
+        recommendation_section += "🔹 <b>Bonnes pratiques générales:</b>\n"
         if spf_status == "✅ Configuré" and dmarc_status == "✅ Configuré":
-            footer += "• Excellent! Ce domaine est bien protégé contre l'usurpation d'identité\n"
+            recommendation_section += "  • Excellente configuration SPF/DMARC, continuez ainsi!\n"
+        recommendation_section += "  • Utilisez un gestionnaire de mots de passe (Bitwarden, 1Password, LastPass...)\n"
+        recommendation_section += "  • Activez systématiquement l'authentification à deux facteurs\n"
+        recommendation_section += "  • Surveillez régulièrement vos adresses email sur des services comme Have I Been Pwned\n"
         
-        footer += "\n<b>📊 ACTIONS POSSIBLES:</b>\n"
+        sections.append(recommendation_section)
+        
+        # ACTIONS POSSIBLES
+        footer = "\n<b>⚡ ACTIONS POSSIBLES</b>\n"
         footer += "• /rapport - Générer un PDF détaillé\n"
         footer += "• /scan - Analyser une autre cible\n"
-        footer += "• /recherche - Retour au menu principal"
+        footer += "• /recherche - Explorer d'autres données\n\n"
+        footer += "© <i>Bot de Sécurité - Analyse propulsée par XposedOrNot</i>"
         
-        # Assembler le message final
-        response = header + summary + "\n\n" + "\n\n".join(sections) + "\n" + footer
+        # Assembler le rapport complet
+        report = header + "\n\n" + summary + "\n\n" + "\n\n".join(sections) + "\n\n" + footer
         
-        # Envoyer les résultats
-        if len(response) > 4096:
+        # Envoyer le rapport, en le divisant si nécessaire
+        if len(report) > 4096:
             # Premier message avec entête et résumé
-            first_part = header + summary + "\n\n<i>Suite dans le prochain message...</i>"
+            first_part = header + "\n\n" + summary + "\n\n<i>Suite du rapport dans les messages suivants...</i>"
             await update.message.reply_text(first_part, parse_mode='HTML')
             
-            # Diviser le reste en morceaux
-            remaining = "\n\n".join(sections) + "\n" + footer
-            for i in range(0, len(remaining), 3800):
-                part = remaining[i:i+3800]
-                if i + 3800 >= len(remaining):
-                    part += "\n" + footer
-                await update.message.reply_text(part, parse_mode='HTML')
+            # Envoyer chaque section séparément
+            for i, section in enumerate(sections):
+                await update.message.reply_text(section, parse_mode='HTML')
+            
+            # Terminer avec le footer
+            await update.message.reply_text(footer, parse_mode='HTML')
         else:
-            await update.message.reply_text(response, parse_mode='HTML')
+            await update.message.reply_text(report, parse_mode='HTML')
+    
     except Exception as e:
         logger.error(f"Erreur lors de l'analyse de l'email: {str(e)}")
         await update.message.reply_text(
